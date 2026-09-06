@@ -21,7 +21,7 @@ jobs:
 
 
       # ==========================================
-      # 2. 安装编译环境
+      # 2. 安装完整编译依赖
       # ==========================================
       - name: Install dependencies
         run: |
@@ -55,11 +55,46 @@ jobs:
             e2fsprogs \
             bc \
             swig \
-            time
+            time \
+            m4 \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            libelf-dev \
+            libdw-dev \
+            pahole
+
+          echo "=========================================="
+          echo "Checking host tools"
+          echo "=========================================="
+
+          which gcc
+          gcc --version
+
+          which g++
+          g++ --version
+
+          which make
+          make --version
+
+          which flex
+          flex --version
+
+          which bison
+          bison --version
+
+          which m4
+          m4 --version
+
+          which dtc
+          dtc --version
+
+          python3 -c "import elftools; print('pyelftools: OK')"
 
 
       # ==========================================
-      # 3. 下载 iStoreOS 24.10 源码
+      # 3. 下载 iStoreOS 24.10
       # ==========================================
       - name: Clone iStoreOS 24.10
         run: |
@@ -79,50 +114,21 @@ jobs:
 
           cat > .config <<'EOF'
 
-          # ==========================================
-          # Target
-          # ==========================================
-
           CONFIG_TARGET_rockchip=y
           CONFIG_TARGET_rockchip_armv8=y
           CONFIG_TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopc-t4=y
 
-
-          # ==========================================
-          # Filesystem
-          # ==========================================
-
           CONFIG_TARGET_ROOTFS_SQUASHFS=y
           CONFIG_TARGET_ROOTFS_EXT4FS=y
-
-
-          # ==========================================
-          # iStoreOS
-          # ==========================================
 
           CONFIG_PACKAGE_luci-app-store=y
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 
-
-          # ==========================================
-          # Kernel build information
-          # ==========================================
-
           CONFIG_KERNEL_BUILD_USER="iStoreOS"
           CONFIG_KERNEL_BUILD_DOMAIN="iStoreOS"
 
-
-          # ==========================================
-          # RootFS / Kernel partition sizes
-          # ==========================================
-
           CONFIG_TARGET_KERNEL_PARTSIZE=128
           CONFIG_TARGET_ROOTFS_PARTSIZE=256
-
-
-          # ==========================================
-          # Development
-          # ==========================================
 
           CONFIG_DEVEL=y
 
@@ -132,16 +138,70 @@ jobs:
 
 
       # ==========================================
-      # 5. 编译 Linux 内核和设备树
+      # 5. 准备 OpenWrt Host 工具
+      # ==========================================
+      - name: Prepare host tools
+        working-directory: openwrt
+        run: |
+
+          set -eux
+
+          echo "=========================================="
+          echo "Preparing OpenWrt host tools"
+          echo "=========================================="
+
+          mkdir -p staging_dir/host
+
+          echo "System m4:"
+          /usr/bin/m4 --version
+
+          echo "System flex:"
+          /usr/bin/flex --version
+
+          echo "Cleaning possibly broken host m4/flex..."
+
+          rm -f staging_dir/host/bin/m4
+          rm -f staging_dir/host/bin/flex
+
+          echo "Host tool preparation completed."
+
+
+      # ==========================================
+      # 6. 编译 Linux 内核和设备树
       # ==========================================
       - name: Compile Linux kernel and device trees
         working-directory: openwrt
         run: |
+
+          set -eux
+
+          echo "=========================================="
+          echo "Building OpenWrt host tools first"
+          echo "=========================================="
+
+          make tools/compile -j2 V=s
+
+          echo "=========================================="
+          echo "Checking generated m4"
+          echo "=========================================="
+
+          if [ -f staging_dir/host/bin/m4 ]; then
+            file staging_dir/host/bin/m4
+            staging_dir/host/bin/m4 --version
+          else
+            echo "ERROR: OpenWrt m4 was not generated"
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo "Compiling Linux kernel"
+          echo "=========================================="
+
           make target/linux/compile -j2 V=s
 
 
       # ==========================================
-      # 6. 替换为 HD9901 DTB
+      # 7. 替换 HD9901 DTB
       # ==========================================
       - name: Replace NanoPC-T4 DTB with HD9901 DTB
         working-directory: openwrt
@@ -151,23 +211,27 @@ jobs:
 
           DTB="$GITHUB_WORKSPACE/hd9901/hd9901.dtb"
 
-          echo "Checking HD9901 DTB..."
+          echo "=========================================="
+          echo "Checking HD9901 DTB"
+          echo "=========================================="
 
           if [ ! -f "$DTB" ]; then
             echo "ERROR: HD9901 DTB not found!"
             exit 1
           fi
 
-          echo "HD9901 DTB:"
           ls -lh "$DTB"
           file "$DTB"
 
-          echo "Searching NanoPC-T4 DTB..."
+          echo "=========================================="
+          echo "Searching NanoPC-T4 DTB"
+          echo "=========================================="
 
           FOUND=0
 
           while IFS= read -r f
           do
+
             echo "Replacing:"
             echo "$f"
 
@@ -197,62 +261,3 @@ jobs:
           fi
 
           echo "HD9901 DTB replacement completed."
-
-
-      # ==========================================
-      # 7. 编译完整 iStoreOS 固件
-      # ==========================================
-      - name: Build iStoreOS image
-        working-directory: openwrt
-        run: |
-          make -j2 V=s
-
-
-      # ==========================================
-      # 8. 找到并处理固件
-      # ==========================================
-      - name: Prepare final HD9901 image
-        working-directory: openwrt
-        run: |
-
-          set -eux
-
-          mkdir -p output
-
-          echo "=========================================="
-          echo "Searching generated firmware..."
-          echo "=========================================="
-
-          find bin/targets \
-            -type f \
-            \( \
-              -name '*.img.gz' \
-              -o \
-              -name '*sysupgrade*.gz' \
-            \) \
-            -print
-
-
-          IMAGE_GZ=$(
-            find bin/targets \
-              -type f \
-              \( \
-                -name '*.img.gz' \
-                -o \
-                -name '*sysupgrade*.gz' \
-              \) \
-              | head -n 1
-          )
-
-
-          if [ -z "$IMAGE_GZ" ]; then
-
-            echo "ERROR: No firmware image found!"
-
-            echo "All generated files:"
-
-            find bin/targets \
-              -type f \
-              | sort
-
-            exit
