@@ -12,109 +12,160 @@ jobs:
     timeout-minutes: 240
 
     steps:
-      - name: Checkout HD9901 project
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk gcc-multilib \
-            gettext git libncurses5-dev libssl-dev python3 python3-distutils \
-            rsync unzip zlib1g-dev file wget ccache \
-            device-tree-compiler u-boot-tools dosfstools e2fsprogs \
-            bc swig python3-setuptools
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gcc-multilib \
+            gettext \
+            git \
+            libncurses5-dev \
+            libssl-dev \
+            python3 \
+            rsync \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            ccache \
+            device-tree-compiler \
+            u-boot-tools \
+            dosfstools \
+            e2fsprogs \
+            bc \
+            swig \
+            python3-setuptools \
+            time
 
       - name: Clone iStoreOS 24.10
         run: |
-          git clone --depth=1 --branch istoreos-24.10 \
-            https://github.com/istoreos/istoreos.git openwrt
+          git clone --depth=1 \
+            --branch istoreos-24.10 \
+            https://github.com/istoreos/istoreos.git \
+            openwrt
 
-      - name: Configure RK3399 NanoPC-T4 build base
+      - name: Configure iStoreOS
         working-directory: openwrt
         run: |
-          cat > .config <<'CONFIG'
+          cat > .config <<'EOF'
           CONFIG_TARGET_rockchip=y
           CONFIG_TARGET_rockchip_armv8=y
           CONFIG_TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopc-t4=y
+
           CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_TARGET_IMAGES_GZIP=y
-          CONFIG_TARGET_KERNEL_PARTSIZE=128
-          CONFIG_TARGET_ROOTFS_PARTSIZE=896
+          CONFIG_TARGET_ROOTFS_EXT4FS=y
+
           CONFIG_PACKAGE_luci-app-store=y
-          CONFIG_LUCI_LANG_zh-cn=y
-          CONFIG_KERNEL_BUILD_USER="HD9901"
-          CONFIG_KERNEL_BUILD_HOST="github-actions"
-          CONFIG_DEBUG_INFO_BTF=y
-          CONFIG_DEBUG_INFO_BTF_MODULES=y
-          CONFIG_BPF_SYSCALL=y
-          CONFIG_DEBUG_INFO=y
-          CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
-          CONFIG_KERNEL_BTF=y
-          CONFIG_KERNEL_XZ=y
-          CONFIG_TARGET_INITRAMFS_COMPRESSION_XZ=y
-          CONFIG
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+
+          CONFIG_KERNEL_BUILD_USER="iStoreOS"
+          CONFIG_KERNEL_BUILD_DOMAIN="iStoreOS"
+
+          CONFIG_TARGET_KERNEL_PARTSIZE=128
+          CONFIG_TARGET_ROOTFS_PARTSIZE=256
+
+          CONFIG_DEVEL=y
+          EOF
+
           make defconfig
 
       - name: Compile Linux kernel and device trees
         working-directory: openwrt
         run: |
-          make target/linux/compile -j$(nproc) V=s
+          make target/linux/compile -j2 V=s
 
-      - name: Replace generated NanoPC-T4 DTB with HD9901 DTB
+      - name: Replace NanoPC-T4 DTB with HD9901 DTB
         working-directory: openwrt
         run: |
           set -eux
-          mapfile -t DTBS < <(find build_dir -type f -name 'image-rk3399-nanopc-t4.dtb')
-          test "${#DTBS[@]}" -ge 1
 
-          for dtb in "${DTBS[@]}"; do
-            echo "Replacing $dtb"
-            cp "$GITHUB_WORKSPACE/hd9901/hd9901.dtb" "$dtb"
-            file "$dtb"
-            sha256sum "$dtb"
-          done
+          DTB="$GITHUB_WORKSPACE/hd9901/hd9901.dtb"
+
+          if [ ! -f "$DTB" ]; then
+            echo "ERROR: HD9901 DTB not found"
+            exit 1
+          fi
+
+          echo "HD9901 DTB:"
+          ls -lh "$DTB"
+          file "$DTB"
+
+          FOUND=0
+
+          while IFS= read -r f; do
+            echo "Replacing: $f"
+            cp "$DTB" "$f"
+            FOUND=1
+          done < <(find build_dir -type f -name 'image-rk3399-nanopc-t4.dtb')
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: NanoPC-T4 DTB was not found"
+            find build_dir -type f -name '*.dtb' | head -50
+            exit 1
+          fi
 
       - name: Build iStoreOS image
         working-directory: openwrt
         run: |
-          make -j$(nproc) V=s
+          make -j2 V=s
 
-      - name: Locate generated image
-        run: |
-          set -eux
-
-          find openwrt/bin/targets -maxdepth 5 -type f | sort | tee /tmp/images.txt
-
-          IMG_GZ=$(find openwrt/bin/targets \
-            -type f \
-            -name '*sysupgrade.img.gz' \
-            | head -n1)
-
-          if [ -z "$IMG_GZ" ]; then
-            IMG_GZ=$(find openwrt/bin/targets \
-              -type f \
-              -name '*.img.gz' \
-              | head -n1)
-          fi
-
-          test -n "$IMG_GZ"
-
-          echo "IMG_GZ=$IMG_GZ" >> "$GITHUB_ENV"
-
-      - name: Rebuild the known-good HD9901 boot area
+      - name: Prepare final HD9901 image
+        working-directory: openwrt
         run: |
           set -eux
 
           mkdir -p output
 
-          cat hd9901/old-boot-area.part* > /tmp/old-boot-area.bin
+          echo "Searching generated images..."
+          find bin/targets -type f \( \
+            -name '*.img.gz' \
+            -o -name '*sysupgrade*.gz' \
+          \) -print
 
-          test "$(stat -c %s /tmp/old-boot-area.bin)" -eq 33554432
+          IMAGE_GZ=$(find bin/targets -type f \
+            \( -name '*.img.gz' -o -name '*sysupgrade*.gz' \) \
+            | head -n 1)
 
-          gzip -dc "$IMG_GZ" > /tmp/new.img
+          if [ -z "$IMAGE_GZ" ]; then
+            echo "ERROR: No firmware image found"
+            find bin/targets -type f | sort
+            exit 1
+          fi
+
+          echo "Using image:"
+          echo "$IMAGE_GZ"
+
+          gzip -dc "$IMAGE_GZ" > /tmp/new.img
+
+          echo "Generated image:"
+          ls -lh /tmp/new.img
+
+          echo "Rebuilding old boot area..."
+
+          cat \
+            "$GITHUB_WORKSPACE/hd9901/old-boot-area.part00" \
+            "$GITHUB_WORKSPACE/hd9901/old-boot-area.part01" \
+            > /tmp/old-boot-area.bin
+
+          BOOT_SIZE=$(stat -c%s /tmp/old-boot-area.bin)
+
+          if [ "$BOOT_SIZE" -ne 33554432 ]; then
+            echo "ERROR: Boot area size is $BOOT_SIZE"
+            exit 1
+          fi
 
           cp /tmp/new.img output/HD9901-iStoreOS-24.10.img
+
+          echo "Restoring original HD9901 bootloader..."
 
           dd \
             if=/tmp/old-boot-area.bin \
@@ -126,29 +177,42 @@ jobs:
             conv=notrunc \
             status=progress
 
-          gzip -9 -c \
+          sync
+
+          echo "Final image:"
+          ls -lh output/HD9901-iStoreOS-24.10.img
+
+      - name: Compress firmware
+        working-directory: openwrt
+        run: |
+          set -eux
+
+          gzip -c \
             output/HD9901-iStoreOS-24.10.img \
-            > output/HD9901-iStoreOS-24.10-final.img.gz
+            > output/HD9901-iStoreOS-24.10.img.gz
+
+          sha256sum \
+            output/HD9901-iStoreOS-24.10.img \
+            output/HD9901-iStoreOS-24.10.img.gz \
+            > output/SHA256SUMS.txt
 
           cd output
 
-          sha256sum \
+          zip \
+            HD9901-iStoreOS-24.10.zip \
             HD9901-iStoreOS-24.10.img \
-            > HD9901-iStoreOS-24.10.img.sha256
+            HD9901-iStoreOS-24.10.img.gz \
+            SHA256SUMS.txt
 
-          sha256sum \
-            HD9901-iStoreOS-24.10-final.img.gz \
-            > HD9901-iStoreOS-24.10-final.img.gz.sha256
+          ls -lh
 
-          zip -9 HD9901-iStoreOS-24.10-final.zip \
-            HD9901-iStoreOS-24.10.img \
-            HD9901-iStoreOS-24.10-final.img.gz \
-            HD9901-iStoreOS-24.10.img.sha256 \
-            HD9901-iStoreOS-24.10-final.img.gz.sha256
-
-      - name: Upload firmware artifacts
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: HD9901-iStoreOS-24.10-final
-          path: output/*
-          retention-days: 30
+          name: HD9901-iStoreOS-24.10
+          path: |
+            openwrt/output/HD9901-iStoreOS-24.10.img
+            openwrt/output/HD9901-iStoreOS-24.10.img.gz
+            openwrt/output/HD9901-iStoreOS-24.10.zip
+            openwrt/output/SHA256SUMS.txt
+          if-no-files-found: error
