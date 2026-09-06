@@ -1,4 +1,4 @@
-name: Build HD9901 iStoreOS 24.10
+name: Build HD9901 iStoreOS 24.10 - RK3399
 
 on:
   workflow_dispatch:
