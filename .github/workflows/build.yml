@@ -53,7 +53,7 @@ jobs:
           CONFIG_KERNEL_BTF=y
           CONFIG_KERNEL_XZ=y
           CONFIG_TARGET_INITRAMFS_COMPRESSION_XZ=y
-          CONFIG'
+          CONFIG
           make defconfig
 
       - name: Compile Linux kernel and device trees
