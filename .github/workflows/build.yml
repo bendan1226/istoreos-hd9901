@@ -1,4 +1,4 @@
-name: Build HD9901 iStoreOS
+name: Build HD9901 iStoreOS 24.10
 
 on:
   workflow_dispatch:
@@ -8,54 +8,83 @@ permissions:
 
 jobs:
   build:
-    name: HD9901 iStoreOS Build
+    name: HD9901 iStoreOS 24.10 Build
     runs-on: ubuntu-22.04
     timeout-minutes: 360
+
+    env:
+      ISTOREOS_BRANCH: istoreos-24.10
+      BUILD_JOBS: 2
 
     steps:
 
       # ==========================================================
       # 1. Checkout
       # ==========================================================
-      - name: Checkout repository
+      - name: Checkout HD9901 repository
         uses: actions/checkout@v4
 
       # ==========================================================
-      # 2. 检查 HD9901 文件
+      # 2. 检查仓库文件
       # ==========================================================
       - name: Check HD9901 files
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           echo "======================================"
-          echo "HD9901 files"
+          echo "HD9901 repository"
           echo "======================================"
 
-          find hd9901 -maxdepth 2 -type f -print
+          find hd9901 -maxdepth 1 -type f -printf '%f\n' | sort
+
+          echo
+          echo "Checking required files..."
 
           test -f hd9901/hd9901.dtb
+          test -f hd9901/hd9901.dts
           test -f hd9901/old-boot-area.part00
           test -f hd9901/old-boot-area.part01
 
           echo
-          echo "DTB:"
+          echo "======================================"
+          echo "DTB information"
+          echo "======================================"
+
           file hd9901/hd9901.dtb
 
           echo
-          echo "SHA256:"
+          echo "DTB SHA256:"
           sha256sum hd9901/hd9901.dtb
 
           echo
-          echo "Boot area:"
-          ls -lh hd9901/old-boot-area.part00
-          ls -lh hd9901/old-boot-area.part01
+          echo "DTS SHA256:"
+          sha256sum hd9901/hd9901.dts
+
+          echo
+          echo "======================================"
+          echo "Boot area"
+          echo "======================================"
+
+          ls -lh \
+            hd9901/old-boot-area.part00 \
+            hd9901/old-boot-area.part01
+
+          echo
+          echo "======================================"
+          echo "Repository status"
+          echo "======================================"
+
+          git status --short
+          git log -1 --oneline
 
       # ==========================================================
       # 3. 安装编译环境
       # ==========================================================
       - name: Install build dependencies
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           sudo apt-get update
 
@@ -66,12 +95,15 @@ jobs:
             bison \
             g++ \
             gawk \
-            gcc-multilib \
+            gcc \
             gettext \
             git \
             libncurses5-dev \
             libncurses-dev \
             libssl-dev \
+            libelf-dev \
+            libfdt-dev \
+            libpython3-dev \
             python3 \
             python3-dev \
             python3-pip \
@@ -92,22 +124,24 @@ jobs:
             bc \
             swig \
             xsltproc \
-            libelf-dev \
-            libfdt-dev \
-            libpython3-dev \
-            time
+            time \
+            patch \
+            perl \
+            subversion \
+            gperf \
+            qemu-utils
 
       # ==========================================================
-      # 4. 安装 Python ELF 工具
+      # 4. Python tools
       # ==========================================================
-      - name: Install Python packages
+      - name: Install Python tools
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           python3 -m pip install \
             --upgrade \
             --user \
-            pip \
             setuptools \
             wheel \
             pyelftools
@@ -118,60 +152,57 @@ jobs:
             "from elftools.elf.elffile import ELFFile; print('pyelftools OK')"
 
       # ==========================================================
-      # 5. 检查工具链
+      # 5. 检查编译环境
       # ==========================================================
       - name: Check build environment
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           echo "======================================"
-          echo "Python"
+          echo "CPU"
           echo "======================================"
 
+          nproc
+
+          echo
+          echo "======================================"
+          echo "Memory"
+          echo "======================================"
+
+          free -h
+
+          echo
+          echo "======================================"
+          echo "Disk"
+          echo "======================================"
+
+          df -h
+
+          echo
+          echo "======================================"
+          echo "Tool versions"
+          echo "======================================"
+
+          gcc --version | head -n 1
+          make --version | head -n 1
           python3 --version
-
-          echo
-          echo "======================================"
-          echo "pyelftools"
-          echo "======================================"
-
-          python3 -c \
-            "import elftools; print(elftools.__file__)"
-
-          python3 -c \
-            "from elftools.elf.elffile import ELFFile; print('ELFFile OK')"
-
-          echo
-          echo "======================================"
-          echo "DTC"
-          echo "======================================"
-
           dtc --version
-
-          echo
-          echo "======================================"
-          echo "mkimage"
-          echo "======================================"
-
           mkimage -V
-
-          echo
-          echo "======================================"
-          echo "GCC"
-          echo "======================================"
-
-          gcc --version
+          flex --version | head -n 1
+          bison --version | head -n 1
 
       # ==========================================================
       # 6. Clone iStoreOS 24.10
       # ==========================================================
-      - name: Clone iStoreOS
+      - name: Clone iStoreOS 24.10
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           git clone \
             --depth=1 \
-            --branch istoreos-24.10 \
+            --branch "${ISTOREOS_BRANCH}" \
             https://github.com/istoreos/istoreos.git \
             openwrt
 
@@ -179,7 +210,7 @@ jobs:
 
           echo
           echo "======================================"
-          echo "iStoreOS version"
+          echo "iStoreOS"
           echo "======================================"
 
           git log -1 --oneline
@@ -189,33 +220,170 @@ jobs:
           git branch --show-current
 
       # ==========================================================
-      # 7. 保存 HD9901 DTB
+      # 7. 保存原始 HD9901 文件
       # ==========================================================
-      - name: Backup HD9901 DTB
+      - name: Backup original HD9901 files
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           mkdir -p hd9901-backup
 
           cp \
             hd9901/hd9901.dtb \
-            hd9901-backup/hd9901.dtb
+            hd9901-backup/
+
+          cp \
+            hd9901/hd9901.dts \
+            hd9901-backup/
 
           cp \
             hd9901/old-boot-area.part00 \
-            hd9901-backup/old-boot-area.part00
+            hd9901-backup/
 
           cp \
             hd9901/old-boot-area.part01 \
-            hd9901-backup/old-boot-area.part01
+            hd9901-backup/
+
+          cp \
+            hd9901/SOURCE-HASHES.txt \
+            hd9901-backup/ 2>/dev/null || true
+
+          echo
+          echo "Backup:"
+          find hd9901-backup -maxdepth 1 -type f -printf '%f\n' | sort
 
       # ==========================================================
-      # 8. 配置 NanoPC-T4 / RK3399
+      # 8. 准备 HD9901 DTS
+      #
+      # iStoreOS 24.10 Rockchip:
+      # friendlyarm_nanopc-t4
+      # 默认 DTS:
+      # rockchip/rk3399-nanopc-t4
+      #
+      # 这里在 Linux 编译之前直接使用 HD9901 DTS
       # ==========================================================
-      - name: Configure iStoreOS
-        working-directory: openwrt
+      - name: Install HD9901 DTS before kernel build
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+
+          SOURCE_DTS="$GITHUB_WORKSPACE/hd9901/hd9901.dts"
+
+          test -f "$SOURCE_DTS"
+
+          echo "Source DTS:"
+          ls -lh "$SOURCE_DTS"
+
+          echo
+          echo "Searching Rockchip DTS..."
+
+          find openwrt/target/linux/rockchip \
+            -type f \
+            \( \
+              -name 'rk3399-nanopc-t4.dts' \
+              -o \
+              -name 'rk3399-nanopc-t4.dtsi' \
+            \) \
+            -print
+
+          TARGET_DTS="openwrt/target/linux/rockchip/files/arch/arm64/boot/dts/rockchip/rk3399-nanopc-t4.dts"
+
+          if [ ! -f "$TARGET_DTS" ]; then
+            echo "ERROR: Target NanoPC-T4 DTS was not found."
+            echo
+            echo "Available RK3399 DTS files:"
+            find openwrt/target/linux/rockchip \
+              -type f \
+              -name 'rk3399*.dts' \
+              -print \
+              | sort
+            exit 1
+          fi
+
+          echo
+          echo "Original DTS:"
+          ls -lh "$TARGET_DTS"
+
+          cp \
+            "$TARGET_DTS" \
+            "$TARGET_DTS.original"
+
+          cp \
+            "$SOURCE_DTS" \
+            "$TARGET_DTS"
+
+          echo
+          echo "HD9901 DTS installed:"
+          ls -lh "$TARGET_DTS"
+
+          echo
+          echo "First lines:"
+          sed -n '1,40p' "$TARGET_DTS"
+
+      # ==========================================================
+      # 9. 检查 HD9901 DTS
+      # ==========================================================
+      - name: Validate HD9901 DTS
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          DTS="openwrt/target/linux/rockchip/files/arch/arm64/boot/dts/rockchip/rk3399-nanopc-t4.dts"
+
+          test -f "$DTS"
+
+          echo "======================================"
+          echo "HD9901 DTS validation"
+          echo "======================================"
+
+          echo
+          echo "compatible:"
+          grep -n \
+            'compatible.*rockchip,rk3399' \
+            "$DTS" \
+            | head -n 10 || true
+
+          echo
+          echo "GMAC:"
+          grep -n \
+            'rk3399-gmac\|phy-mode.*rgmii' \
+            "$DTS" \
+            | head -n 20 || true
+
+          echo
+          echo "eMMC:"
+          grep -n \
+            'sdhci@fe330000\|mmc-hs400' \
+            "$DTS" \
+            | head -n 20 || true
+
+          echo
+          echo "USB:"
+          grep -n \
+            'fe800000\|fe900000' \
+            "$DTS" \
+            | head -n 20 || true
+
+          echo
+          echo "PCIe:"
+          grep -n \
+            'pcie@f8000000\|status.*disabled' \
+            "$DTS" \
+            | head -n 20 || true
+
+          echo
+          echo "DTS line count:"
+          wc -l "$DTS"
+
+      # ==========================================================
+      # 10. 配置 iStoreOS
+      # ==========================================================
+      - name: Configure iStoreOS for RK3399
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           rm -f .config
 
@@ -244,160 +412,254 @@ jobs:
           CONFIG_PACKAGE_usbutils=y
           CONFIG_PACKAGE_pciutils=y
 
-          CONFIG_KERNEL_XZ=y
+          CONFIG_PACKAGE_kmod-usb-core=y
+          CONFIG_PACKAGE_kmod-usb2=y
+          CONFIG_PACKAGE_kmod-usb3=y
+
+          CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+          CONFIG_PACKAGE_ethtool=y
 
           CONFIG_KERNEL_BUILD_USER="HD9901"
           CONFIG_KERNEL_BUILD_HOST="github-actions"
 
           EOF
 
+          echo
+          echo "======================================"
+          echo "Running make defconfig"
+          echo "======================================"
+
           make defconfig
 
           echo
           echo "======================================"
-          echo "Final configuration"
+          echo "Final target configuration"
           echo "======================================"
 
           grep \
             -E \
-            'CONFIG_TARGET_rockchip|CONFIG_TARGET_ROOTFS|CONFIG_TARGET_KERNEL_PARTSIZE|CONFIG_TARGET_ROOTFS_PARTSIZE' \
-            .config
+            'CONFIG_TARGET_rockchip|CONFIG_TARGET_ROOTFS|CONFIG_TARGET_KERNEL_PARTSIZE|CONFIG_TARGET_ROOTFS_PARTSIZE|CONFIG_LINUX_' \
+            .config \
+            | sort
 
       # ==========================================================
-      # 9. OpenWrt prerequisite
+      # 11. 确认设备配置
       # ==========================================================
-      - name: Check OpenWrt prerequisites
+      - name: Verify NanoPC-T4 build profile
         working-directory: openwrt
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+
+          echo "======================================"
+          echo "Target profile"
+          echo "======================================"
+
+          grep \
+            'CONFIG_TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopc-t4' \
+            .config
+
+          echo
+          echo "Expected:"
+          echo "friendlyarm_nanopc-t4"
+          echo
+          echo "The Linux DTS has already been replaced"
+          echo "with HD9901 DTS before kernel compilation."
+
+      # ==========================================================
+      # 12. OpenWrt/iStoreOS prerequisite
+      # ==========================================================
+      - name: Check build prerequisites
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           make prereq V=s
 
       # ==========================================================
-      # 10. 下载源码包
+      # 13. 更新 feeds
+      # ==========================================================
+      - name: Update feeds
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # ==========================================================
+      # 14. 重新生成配置
+      # ==========================================================
+      - name: Re-run defconfig
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          make defconfig
+
+      # ==========================================================
+      # 15. 下载源码
       # ==========================================================
       - name: Download package sources
         working-directory: openwrt
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           make download \
-            -j$(nproc) \
+            -j${BUILD_JOBS} \
             V=s
 
       # ==========================================================
-      # 11. 编译 target/linux
+      # 16. 准备 Linux kernel
+      # ==========================================================
+      - name: Prepare Linux kernel
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          make target/linux/prepare \
+            -j${BUILD_JOBS} \
+            V=s
+
+      # ==========================================================
+      # 17. 检查最终 Linux DTS
+      # ==========================================================
+      - name: Verify final kernel DTS
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "======================================"
+          echo "Searching final DTS"
+          echo "======================================"
+
+          find build_dir \
+            -type f \
+            -name 'rk3399-nanopc-t4.dts' \
+            -print
+
+          echo
+          echo "Checking DTS content..."
+
+          FOUND=0
+
+          while IFS= read -r DTS; do
+            if grep -q 'rockchip,rk3399-mid' "$DTS"; then
+              echo
+              echo "HD9901 DTS detected:"
+              echo "$DTS"
+              FOUND=1
+              break
+            fi
+          done < <(
+            find build_dir \
+              -type f \
+              -name 'rk3399-nanopc-t4.dts'
+          )
+
+          if [ "$FOUND" -ne 1 ]; then
+            echo
+            echo "ERROR: HD9901 DTS was not propagated into kernel source."
+            exit 1
+          fi
+
+      # ==========================================================
+      # 18. 编译 Linux kernel
+      #
+      # 使用 -j2，避免之前 flex/m4 高并发问题
       # ==========================================================
       - name: Compile Linux kernel
         working-directory: openwrt
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           make target/linux/compile \
-            -j$(nproc) \
+            -j${BUILD_JOBS} \
             V=s
 
       # ==========================================================
-      # 12. 查找 RK3399 DTB
+      # 19. 检查生成的 HD9901 DTB
       # ==========================================================
-      - name: Find RK3399 DTB
+      - name: Verify generated DTB
         working-directory: openwrt
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           echo "======================================"
-          echo "Searching DTB"
+          echo "Searching generated DTB"
           echo "======================================"
 
           find build_dir \
             -type f \
             -name '*.dtb' \
-            -print
-
-      # ==========================================================
-      # 13. 安装 HD9901 DTB
-      # ==========================================================
-      - name: Install HD9901 DTB
-        working-directory: openwrt
-        run: |
-          set -eux
-
-          SOURCE_DTB="$GITHUB_WORKSPACE/hd9901/hd9901.dtb"
-
-          test -f "$SOURCE_DTB"
-
-          echo "Source DTB:"
-          file "$SOURCE_DTB"
+            -print \
+            | sort
 
           echo
-          echo "Searching NanoPC-T4 DTB..."
+          echo "Checking NanoPC-T4 DTB..."
 
-          mapfile -t DTB_FILES < <(
+          mapfile -t DTBS < <(
             find build_dir \
               -type f \
-              \( \
-                -name '*nanopc-t4*.dtb' \
-                -o \
-                -name '*nanopc_t4*.dtb' \
-              \)
+              -name 'image-rk3399-nanopc-t4.dtb'
           )
 
-          echo "Found DTB count:"
-          echo "${#DTB_FILES[@]}"
-
-          if [ "${#DTB_FILES[@]}" -eq 0 ]; then
-            echo "ERROR: NanoPC-T4 DTB not found!"
+          if [ "${#DTBS[@]}" -eq 0 ]; then
+            echo "ERROR: image-rk3399-nanopc-t4.dtb not found!"
             exit 1
           fi
 
-          for DTB in "${DTB_FILES[@]}"; do
+          for DTB in "${DTBS[@]}"; do
 
             echo
-            echo "Replacing:"
+            echo "DTB:"
             echo "$DTB"
 
-            cp \
-              "$SOURCE_DTB" \
-              "$DTB"
-
-            echo "Installed:"
             file "$DTB"
+
+            echo
+            echo "SHA256:"
+            sha256sum "$DTB"
+
+            echo
+            echo "Decompiled compatible:"
+            dtc -I dtb -O dts "$DTB" 2>/dev/null \
+              | grep -m 5 'compatible' \
+              || true
 
           done
 
       # ==========================================================
-      # 14. 重新执行 kernel compile
+      # 20. 完整编译
       # ==========================================================
-      - name: Rebuild Linux kernel
+      - name: Build iStoreOS firmware
         working-directory: openwrt
+        shell: bash
         run: |
-          set -eux
-
-          make target/linux/compile \
-            -j$(nproc) \
-            V=s
-
-      # ==========================================================
-      # 15. 编译完整固件
-      # ==========================================================
-      - name: Build iStoreOS
-        working-directory: openwrt
-        run: |
-          set -eux
+          set -euxo pipefail
 
           make \
-            -j$(nproc) \
+            -j${BUILD_JOBS} \
             V=s
 
       # ==========================================================
-      # 16. 显示编译结果
+      # 21. 显示生成结果
       # ==========================================================
-      - name: List firmware
+      - name: List firmware files
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           echo "======================================"
-          echo "Firmware files"
+          echo "Firmware output"
           echo "======================================"
 
           find openwrt/bin/targets \
@@ -406,29 +668,34 @@ jobs:
             | sort
 
       # ==========================================================
-      # 17. 创建输出目录
+      # 22. 创建输出目录
       # ==========================================================
-      - name: Prepare output
+      - name: Prepare output directory
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
+          rm -rf output
           mkdir -p output
 
       # ==========================================================
-      # 18. 查找最终镜像
+      # 23. 找到 sysupgrade 镜像
       # ==========================================================
-      - name: Find final image
+      - name: Find sysupgrade image
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
-          echo "Searching image..."
+          echo "======================================"
+          echo "Searching sysupgrade image"
+          echo "======================================"
 
           find openwrt/bin/targets \
             -type f \
             \( \
-              -name '*.img' \
+              -name '*sysupgrade.img.gz' \
               -o \
-              -name '*.img.gz' \
+              -name '*sysupgrade.tar.gz' \
             \) \
             -print
 
@@ -440,138 +707,250 @@ jobs:
           )
 
           if [ -z "$IMG_GZ" ]; then
-            IMG_GZ=$(
-              find openwrt/bin/targets \
-                -type f \
-                -name '*.img.gz' \
-                | head -n 1
-            )
-          fi
-
-          if [ -z "$IMG_GZ" ]; then
-            echo "ERROR: Firmware image not found!"
+            echo
+            echo "ERROR: sysupgrade.img.gz not found!"
             exit 1
           fi
 
-          echo "Selected:"
+          echo
+          echo "Selected image:"
           echo "$IMG_GZ"
 
           cp \
             "$IMG_GZ" \
-            output/HD9901-iStoreOS-24.10.img.gz
+            output/HD9901-iStoreOS-24.10-sysupgrade.img.gz
 
-          echo "IMG_GZ=$IMG_GZ" >> "$GITHUB_ENV"
+          echo "SYSUPGRADE_GZ=$IMG_GZ" >> "$GITHUB_ENV"
 
       # ==========================================================
-      # 19. 解压镜像
+      # 24. 解压 sysupgrade 镜像
       # ==========================================================
-      - name: Extract image
+      - name: Extract sysupgrade image
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           gzip -dc \
-            output/HD9901-iStoreOS-24.10.img.gz \
+            output/HD9901-iStoreOS-24.10-sysupgrade.img.gz \
             > \
-            output/HD9901-iStoreOS-24.10.img
+            output/HD9901-iStoreOS-24.10-sysupgrade.img
 
           echo
-          echo "Image information:"
-          ls -lh output/HD9901-iStoreOS-24.10.img
-
-          file \
-            output/HD9901-iStoreOS-24.10.img
-
-      # ==========================================================
-      # 20. 检查旧 boot area
-      # ==========================================================
-      - name: Check HD9901 boot area
-        run: |
-          set -eux
-
-          echo "======================================"
-          echo "HD9901 boot area"
-          echo "======================================"
-
+          echo "Image:"
           ls -lh \
-            hd9901/old-boot-area.part00 \
-            hd9901/old-boot-area.part01
+            output/HD9901-iStoreOS-24.10-sysupgrade.img
 
-          SIZE0=$(stat -c%s hd9901/old-boot-area.part00)
-          SIZE1=$(stat -c%s hd9901/old-boot-area.part01)
-
-          echo "part00 = $SIZE0"
-          echo "part01 = $SIZE1"
-
-          TOTAL=$((SIZE0 + SIZE1))
-
-          echo "Total = $TOTAL bytes"
+          echo
+          echo "File:"
+          file \
+            output/HD9901-iStoreOS-24.10-sysupgrade.img
 
       # ==========================================================
-      # 21. 备份最终镜像
+      # 25. 保存 HD9901 DTB
       # ==========================================================
-      - name: Create raw firmware backup
+      - name: Copy HD9901 DTB
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           cp \
-            output/HD9901-iStoreOS-24.10.img \
-            output/HD9901-iStoreOS-24.10-raw.img
+            hd9901/hd9901.dtb \
+            output/HD9901-original.dtb
 
       # ==========================================================
-      # 22. SHA256
+      # 26. 保存 HD9901 DTS
+      # ==========================================================
+      - name: Copy HD9901 DTS
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cp \
+            hd9901/hd9901.dts \
+            output/HD9901-original.dts
+
+      # ==========================================================
+      # 27. 保存原始 boot area
+      # ==========================================================
+      - name: Copy original HD9901 boot area
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cp \
+            hd9901/old-boot-area.part00 \
+            output/HD9901-old-boot-area.part00
+
+          cp \
+            hd9901/old-boot-area.part01 \
+            output/HD9901-old-boot-area.part01
+
+          if [ -f hd9901/SOURCE-HASHES.txt ]; then
+            cp \
+              hd9901/SOURCE-HASHES.txt \
+              output/SOURCE-HASHES.txt
+          fi
+
+          echo
+          echo "Original boot area:"
+          ls -lh \
+            output/HD9901-old-boot-area.part00 \
+            output/HD9901-old-boot-area.part01
+
+      # ==========================================================
+      # 28. 保存编译出来的 HD9901 DTB
+      # ==========================================================
+      - name: Export compiled HD9901 DTB
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          DTB=$(
+            find openwrt/build_dir \
+              -type f \
+              -name 'image-rk3399-nanopc-t4.dtb' \
+              | head -n 1
+          )
+
+          if [ -z "$DTB" ]; then
+            echo "ERROR: compiled DTB not found!"
+            exit 1
+          fi
+
+          cp \
+            "$DTB" \
+            output/HD9901-linux-6.6.dtb
+
+          file \
+            output/HD9901-linux-6.6.dtb
+
+          sha256sum \
+            output/HD9901-linux-6.6.dtb
+
+      # ==========================================================
+      # 29. 创建 boot area 备份包
+      # ==========================================================
+      - name: Create boot area backup
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd output
+
+          zip -9 \
+            HD9901-original-boot-backup.zip \
+            HD9901-old-boot-area.part00 \
+            HD9901-old-boot-area.part01 \
+            HD9901-original.dtb \
+            HD9901-original.dts
+
+      # ==========================================================
+      # 30. SHA256
       # ==========================================================
       - name: Generate SHA256
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+
+          cd output
 
           sha256sum \
-            output/HD9901-iStoreOS-24.10.img \
+            HD9901-iStoreOS-24.10-sysupgrade.img \
             > \
-            output/HD9901-iStoreOS-24.10.img.sha256
+            HD9901-iStoreOS-24.10-sysupgrade.img.sha256
 
           sha256sum \
-            output/HD9901-iStoreOS-24.10.img.gz \
+            HD9901-iStoreOS-24.10-sysupgrade.img.gz \
             > \
-            output/HD9901-iStoreOS-24.10.img.gz.sha256
+            HD9901-iStoreOS-24.10-sysupgrade.img.gz.sha256
+
+          sha256sum \
+            HD9901-linux-6.6.dtb \
+            > \
+            HD9901-linux-6.6.dtb.sha256
+
+          echo
+          echo "======================================"
+          echo "SHA256"
+          echo "======================================"
+
+          cat *.sha256
 
       # ==========================================================
-      # 23. 创建 ZIP
+      # 31. 创建最终 ZIP
       # ==========================================================
-      - name: Create ZIP package
+      - name: Create HD9901 firmware ZIP
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           cd output
 
           zip -9 \
             HD9901-iStoreOS-24.10.zip \
-            HD9901-iStoreOS-24.10.img \
-            HD9901-iStoreOS-24.10.img.gz \
-            HD9901-iStoreOS-24.10.img.sha256 \
-            HD9901-iStoreOS-24.10.img.gz.sha256
+            HD9901-iStoreOS-24.10-sysupgrade.img \
+            HD9901-iStoreOS-24.10-sysupgrade.img.gz \
+            HD9901-iStoreOS-24.10-sysupgrade.img.sha256 \
+            HD9901-iStoreOS-24.10-sysupgrade.img.gz.sha256 \
+            HD9901-linux-6.6.dtb \
+            HD9901-linux-6.6.dtb.sha256 \
+            HD9901-original.dtb \
+            HD9901-original.dts \
+            HD9901-old-boot-area.part00 \
+            HD9901-old-boot-area.part01 \
+            HD9901-original-boot-backup.zip \
+            2>/dev/null || true
+
+          echo
+          echo "ZIP:"
+          ls -lh \
+            HD9901-iStoreOS-24.10.zip
 
       # ==========================================================
-      # 24. 显示最终文件
+      # 32. 最终检查
       # ==========================================================
       - name: Final check
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           echo
           echo "======================================"
-          echo "BUILD COMPLETE"
+          echo "HD9901 BUILD COMPLETE"
           echo "======================================"
 
+          echo
+          echo "Output files:"
           ls -lh output/
 
           echo
+          echo "======================================"
+          echo "Firmware:"
+          echo "======================================"
+
+          file \
+            output/HD9901-iStoreOS-24.10-sysupgrade.img \
+            output/HD9901-iStoreOS-24.10-sysupgrade.img.gz
+
+          echo
+          echo "======================================"
+          echo "DTB:"
+          echo "======================================"
+
+          file \
+            output/HD9901-linux-6.6.dtb
+
+          echo
+          echo "======================================"
           echo "SHA256:"
+          echo "======================================"
+
           cat output/*.sha256
 
       # ==========================================================
-      # 25. 上传 Actions Artifacts
+      # 33. 上传 Actions Artifacts
       # ==========================================================
-      - name: Upload firmware
+      - name: Upload HD9901 firmware
         uses: actions/upload-artifact@v4
         with:
           name: HD9901-iStoreOS-24.10
